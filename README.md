@@ -1,6 +1,8 @@
 Currently performance
 
-Uses Vyukov's MPMC with support for a single-consumer optimized `take_sc`.
+Uses Vyukov's MPMC ring buffer.
+
+Against `Mutex<VecDequeue<T>>`:
 
 ```
 Trial                 Ring (ms) Mutex<VecDequeue<T>> (ms)        Diff (%)
@@ -16,4 +18,29 @@ Trial                 Ring (ms) Mutex<VecDequeue<T>> (ms)        Diff (%)
 10                      749.559                   798.004           6.07%
 Mean                    765.932                   789.832           3.00%
 Std Dev                  13.079                    12.594           2.13%
+```
+
+_Note: this isn't the most fair test since VecDequeue grows_.
+
+
+Against `flume`:
+
+```
+Trial                 Ring (ms)          Other<T> :/ (ms)        Diff (%)
+1                       763.761                  2498.028          69.43%
+2                       756.708                  2485.040          69.55%
+3                       748.352                  2491.846          69.97%
+Mean                    756.274                  2491.638          69.65%
+Std Dev                   6.298                     5.304           0.23%
+```
+
+Against `crossbeam_channel`:
+
+```
+Trial                 Ring (ms)          Other<T> :/ (ms)        Diff (%)
+1                       759.799                   746.906          -1.73%
+2                       750.364                   743.368          -0.94%
+3                       762.368                   730.063          -4.42%
+Mean                    757.510                   740.112          -2.36%
+Std Dev                   5.161                     7.251           1.49%
 ```

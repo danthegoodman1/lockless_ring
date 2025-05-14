@@ -31,7 +31,7 @@ impl<T: Send + Sync + Debug + Copy + PartialEq, const N: usize> Ring<T, N> {
         }
     }
 
-    pub fn push(&self, value: T) -> Result<(), T> {
+    pub fn push(&self, value: T) {
         let pos = self.enqueue_counter.fetch_add(1, Ordering::Relaxed); // can use relaxed because we are the only one who gets this number
         let slot_idx = pos % N;
 
@@ -51,10 +51,9 @@ impl<T: Send + Sync + Debug + Copy + PartialEq, const N: usize> Ring<T, N> {
             .store(Box::into_raw(Box::new(value)), Ordering::Release);
 
         self.slots[slot_idx].seq.store(pos + 1, Ordering::Release);
-        Ok(())
     }
 
-    pub fn take(&self) -> Option<T> {
+    pub fn take(&self) -> T {
         let pos = self.dequeue_counter.fetch_add(1, Ordering::Relaxed);
         let slot_idx = pos % N;
 
@@ -84,7 +83,7 @@ impl<T: Send + Sync + Debug + Copy + PartialEq, const N: usize> Ring<T, N> {
 
         self.slots[slot_idx].seq.store(pos + N, Ordering::Release);
 
-        Some(value)
+        value
     }
 }
 
@@ -120,17 +119,17 @@ mod tests {
         ring.push(3);
         ring.push(4); // Ring capacity is N-1
 
-        assert_eq!(ring.take(), Some(1));
-        assert_eq!(ring.take(), Some(2));
-        assert_eq!(ring.take(), Some(3));
-        assert_eq!(ring.take(), Some(4));
+        assert_eq!(ring.take(), 1);
+        assert_eq!(ring.take(), 2);
+        assert_eq!(ring.take(), 3);
+        assert_eq!(ring.take(), 4);
 
         for _ in 0..100000 {
             // Write more to wrap around
             ring.push(55);
             ring.push(66);
-            assert_eq!(ring.take(), Some(55));
-            assert_eq!(ring.take(), Some(66));
+            assert_eq!(ring.take(), 55);
+            assert_eq!(ring.take(), 66);
         }
     }
 
@@ -163,7 +162,7 @@ mod tests {
     const PRODUCERS: usize = 6;
     const CONSUMERS: usize = 6;
     const OPS_PER_PRODUCER: usize = 1_000_000;
-    const TRIALS: usize = 10;
+    const TRIALS: usize = 3;
 
     fn mean(data: &[f64]) -> f64 {
         data.iter().sum::<f64>() / data.len() as f64
@@ -186,7 +185,7 @@ mod tests {
 
         println!(
             "{:<10} {:>20} {:>25} {:>15}",
-            "Trial", "Ring (ms)", "Mutex<VecDequeue<T>> (ms)", "Diff (%)"
+            "Trial", "Ring (ms)", "Other<T> :/ (ms)", "Diff (%)"
         );
         for (i, ((lf, mx), diff)) in lf_times
             .iter()
@@ -225,7 +224,7 @@ mod tests {
         }
     }
 
-    fn run_vec_dequeue_trial() -> std::time::Duration {
+    fn run_vec_dequeue_trial(consumers: usize) -> std::time::Duration {
         let vec: Arc<Mutex<VecDeque<usize>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(ARRAY_SIZE)));
         let mut handles = Vec::new();
@@ -242,20 +241,72 @@ mod tests {
             }));
         }
 
-        for _ in 0..CONSUMERS {
+        for _ in 0..consumers {
             let vec = Arc::clone(&vec);
             handles.push(std::thread::spawn(move || {
-                for i in 0..OPS_PER_PRODUCER {
+                for _ in 0..OPS_PER_PRODUCER {
                     let mut guard = vec.lock().unwrap();
                     guard.pop_front();
                 }
             }));
         }
 
-        for handle in handles.into_iter().take(PRODUCERS) {
+        for handle in handles.into_iter() {
             handle.join().unwrap();
         }
 
+        std::time::Duration::from_secs_f64(start.elapsed().as_secs_f64())
+    }
+
+    fn run_flume_trial(consumers: usize) -> std::time::Duration {
+        let (tx, rx) = flume::bounded(ARRAY_SIZE);
+        let mut handles = Vec::new();
+        let start = Instant::now();
+        for _ in 0..PRODUCERS {
+            let tx = tx.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..OPS_PER_PRODUCER {
+                    tx.send(i).unwrap();
+                }
+            }));
+        }
+        for _ in 0..consumers {
+            let rx = rx.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..OPS_PER_PRODUCER {
+                    rx.recv().unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        std::time::Duration::from_secs_f64(start.elapsed().as_secs_f64())
+    }
+
+    fn run_crossbeam_trial(consumers: usize) -> std::time::Duration {
+        let (tx, rx) = crossbeam_channel::bounded(ARRAY_SIZE);
+        let mut handles = Vec::new();
+        let start = Instant::now();
+        for _ in 0..PRODUCERS {
+            let tx = tx.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..OPS_PER_PRODUCER {
+                    tx.send(i).unwrap();
+                }
+            }));
+        }
+        for _ in 0..consumers {
+            let rx = rx.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..OPS_PER_PRODUCER {
+                    rx.recv().unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
         std::time::Duration::from_secs_f64(start.elapsed().as_secs_f64())
     }
 
@@ -271,29 +322,23 @@ mod tests {
                 for i in 0..OPS_PER_PRODUCER {
                     ring.push(i as i64);
                 }
-                println!("producer done")
             }));
         }
 
         for ii in 0..CONSUMERS {
             let ring = Arc::clone(&ring);
             handles.push(std::thread::spawn(move || {
-                println!("consumer started {}", ii);
                 for _ in 0..OPS_PER_PRODUCER {
-                    while ring.take().is_none() {
-                        println!("consumer waiting for item");
-                        std::hint::spin_loop();
-                    }
+                    ring.take();
                 }
-                println!("consumer done {}", ii)
+                println!("consumer done {}", ii);
             }));
         }
 
-        for handle in handles.into_iter().take(PRODUCERS) {
+        for handle in handles.into_iter() {
             handle.join().unwrap();
         }
 
-        println!("done ring trial");
         std::time::Duration::from_secs_f64(start.elapsed().as_secs_f64())
     }
 
@@ -307,7 +352,7 @@ mod tests {
         let mut vec_dequeue_times = Vec::new();
 
         for _ in 0..TRIALS {
-            vec_dequeue_times.push(run_vec_dequeue_trial());
+            vec_dequeue_times.push(run_vec_dequeue_trial(CONSUMERS));
         }
         println!("done vec trials");
 
@@ -316,6 +361,40 @@ mod tests {
         }
 
         summarize_trials(&lockfree_times, &vec_dequeue_times);
+    }
+
+    #[test]
+    fn test_ring_vs_flume() {
+        println!("Running {TRIALS} trials of bounded-flume producer-consumer workloads");
+        println!("Producers: {PRODUCERS}, Consumers: {CONSUMERS}, Buffer Size: {ARRAY_SIZE}");
+        println!("------------------------------------------------------");
+
+        let mut lockfree_times = Vec::new();
+        let mut flume_times = Vec::new();
+        for _ in 0..TRIALS {
+            flume_times.push(run_flume_trial(CONSUMERS));
+        }
+        for _ in 0..TRIALS {
+            lockfree_times.push(run_ring_trial());
+        }
+        summarize_trials(&lockfree_times, &flume_times);
+    }
+
+    #[test]
+    fn test_ring_vs_crossbeam() {
+        println!("Running {TRIALS} trials of bounded-crossbeam producer-consumer workloads");
+        println!("Producers: {PRODUCERS}, Consumers: {CONSUMERS}, Buffer Size: {ARRAY_SIZE}");
+        println!("------------------------------------------------------");
+
+        let mut lockfree_times = Vec::new();
+        let mut cb_times = Vec::new();
+        for _ in 0..TRIALS {
+            cb_times.push(run_crossbeam_trial(CONSUMERS));
+        }
+        for _ in 0..TRIALS {
+            lockfree_times.push(run_ring_trial());
+        }
+        summarize_trials(&lockfree_times, &cb_times);
     }
 
     #[test]
@@ -337,17 +416,6 @@ mod tests {
             start.elapsed()
         };
 
-        let t_ring_sc = {
-            let start = Instant::now();
-            for i in 0..ITER {
-                ring_sc.push(i);
-            }
-            for _ in 0..ITER {
-                ring_sc.take();
-            }
-            start.elapsed()
-        };
-
         let t_deque = {
             let start = Instant::now();
             for i in 0..ITER {
@@ -359,10 +427,7 @@ mod tests {
             start.elapsed()
         };
 
-        eprintln!(
-            "Ring time: {:?}, Ring (sc) time: {:?}, VecDeque time: {:?}",
-            t_ring, t_ring_sc, t_deque
-        );
+        eprintln!("Ring time: {:?}, VecDeque time: {:?}", t_ring, t_deque);
         // Both should process all items without panicking
     }
 }
