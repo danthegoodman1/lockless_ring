@@ -1,28 +1,19 @@
-Currently getting
+Currently performance
+
+Uses Vyukov's MPMC with support for a single-consumer optimized `take_sc`.
 
 ```
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=11 write_head=9 next_read_head=12 debug_reads=113 debug_writes=214
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=21 write_head=18 next_read_head=22 debug_reads=123 debug_writes=221
-
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=37 write_head=35 next_read_head=38 debug_reads=139 debug_writes=238
-
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=97 write_head=95 next_read_head=98 debug_reads=198 debug_writes=298
-
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=98 write_head=96 next_read_head=99 debug_reads=200 debug_writes=299
-
-thread '<unnamed>' panicked at src/lib.rs:138:17:
-read null value, did the read head pass the write head? read_head=14 write_head=13 next_read_head=15 debug_reads=217 debug_writes=317
+Trial                 Ring (ms) Mutex<VecDequeue<T>> (ms)        Diff (%)
+1                       790.992                   792.962           0.25%
+2                       762.984                   772.668           1.25%
+3                       759.107                   780.309           2.72%
+4                       762.151                   787.134           3.17%
+5                       764.031                   820.384           6.87%
+6                       761.911                   793.853           4.02%
+7                       789.491                   791.479           0.25%
+8                       752.893                   780.804           3.57%
+9                       766.203                   780.719           1.86%
+10                      749.559                   798.004           6.07%
+Mean                    765.932                   789.832           3.00%
+Std Dev                  13.079                    12.594           2.13%
 ```
-
-checked that it's definitely null values that we are swapping in that we're eventually reading as an ok value
-
-I wonder if this is ABA problem? I don't think so because we'd see _another value_ I think (we'd have a shared pointer), not the impossible value
-
-not an ordering problem because i tried everything with SeqCst
