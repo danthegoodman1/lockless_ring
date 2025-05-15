@@ -44,3 +44,5 @@ Trial                 Ring (ms)          Other<T> :/ (ms)        Diff (%)
 Mean                    757.510                   740.112          -2.36%
 Std Dev                   5.161                     7.251           1.49%
 ```
+
+An optimization is maybe instead of a slot being 2 atomics, each slot could be one?
