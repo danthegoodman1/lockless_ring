@@ -66,15 +66,13 @@ impl<T: Send + Sync + Debug + Copy + PartialEq, const N: usize> Ring<T, N> {
             // A enqueue hasn't happened yet, so we need to wait
         }
 
-        let ptr = self.slots[slot_idx].value.load(Ordering::Acquire);
-        if ptr.is_null() {
+        let val_ptr = self.slots[slot_idx].value.load(Ordering::Acquire);
+        if val_ptr.is_null() {
             panic!(
                 "read null value {:?}, did the read head pass the write head? pos={} slot_idx={}",
                 self.debug_swap_impossible_value, pos, slot_idx
             );
         }
-
-        let val_ptr = self.slots[slot_idx].value.load(Ordering::Acquire);
         let value = unsafe { *Box::from_raw(val_ptr) };
 
         self.slots[slot_idx]
